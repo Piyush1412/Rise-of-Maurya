@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Open World Game - Prototype</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #000;
+        }
+        
+        #gameCanvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 100;
+        }
+        
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            max-width: 300px;
+        }
+        
+        #minimap {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 150px;
+            height: 150px;
+            background: rgba(0, 0, 0, 0.6);
+            border: 2px solid #fff;
+            border-radius: 8px;
+        }
+        
+        .control-line {
+            margin: 5px 0;
+        }
+        
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            pointer-events: none;
+        }
+        
+        #crosshair::before,
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.8);
+        }
+        
+        #crosshair::before {
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 2px;
+            transform: translateY(-50%);
+        }
+        
+        #crosshair::after {
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            transform: translateX(-50%);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    
+    <div id="ui">
+        <div><strong>3D Open World Prototype</strong></div>
+        <div>Time: <span id="timeDisplay">12:00</span></div>
+        <div>Position: <span id="posDisplay">0, 0, 0</span></div>
+        <div>FPS: <span id="fpsDisplay">60</span></div>
+    </div>
+    
+    <div id="controls">
+        <div class="control-line"><strong>Controls:</strong></div>
+        <div class="control-line">WASD - Move</div>
+        <div class="control-line">Mouse - Look Around</div>
+        <div class="control-line">Space - Jump</div>
+        <div class="control-line">Shift - Sprint</div>
+        <div class="control-line">T - Toggle Day/Night</div>
+        <div class="control-line">C - Change Camera</div>
+    </div>
+    
+    <canvas id="minimap"></canvas>
+    <div id="crosshair"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Game State
+        const gameState = {
+            time: 12,
+            paused: false,
+            cameraMode: 'first-person'
+        };
+        
+        // Setup
+        const canvas = document.getElementById('gameCanvas');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x87CEEB, 50, 200);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+        
+        const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        sunLight.position.set(50, 50, 50);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.left = -100;
+        sunLight.shadow.camera.right = 100;
+        sunLight.shadow.camera.top = 100;
+        sunLight.shadow.camera.bottom = -100;
+        scene.add(sunLight);
+        
+        // Player
+        const player = {
+            position: new THREE.Vector3(0, 2, 0),
+            velocity: new THREE.Vector3(0, 0, 0),
+            rotation: new THREE.Euler(0, 0, 0),
+            height: 1.8,
+            speed: 0.15,
+            sprintSpeed: 0.3,
+            jumpPower: 0.3,
+            onGround: true
+        };
+        
+        // Input
+        const keys = {};
+        const mouse = { x: 0, y: 0, locked: false };
+        
+        // Terrain
+        function createTerrain() {
+            const size = 200;
+            const segments = 100;
+            const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
+            
+            const vertices = geometry.attributes.position.array;
+            for (let i = 0; i < vertices.length; i += 3) {
+                const x = vertices[i];
+                const y = vertices[i + 1];
+                vertices[i + 2] = Math.sin(x * 0.05) * 2 + Math.cos(y * 0.05) * 2;
+            }
+            
+            geometry.computeVertexNormals();
+            
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x4a7c4e,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+            
+            const terrain = new THREE.Mesh(geometry, material);
+            terrain.rotation.x = -Math.PI / 2;
+            terrain.receiveShadow = true;
+            scene.add(terrain);
+        }
+        
+        // Trees
+        function createTree(x, z) {
+            const group = new THREE.Group();
+            
+            // Trunk
+            const trunkGeometry = new THREE.CylinderGeometry(0.3, 0.4, 4, 8);
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3520 });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.y = 2;
+            trunk.castShadow = true;
+            group.add(trunk);
+            
+            // Foliage
+            const foliageGeometry = new THREE.ConeGeometry(2, 4, 8);
+            const foliageMaterial = new THREE.MeshStandardMaterial({ color: 0x2d5016 });
+            const foliage = new THREE.Mesh(foliageGeometry, foliageMaterial);
+            foliage.position.y = 5;
+            foliage.castShadow = true;
+            group.add(foliage);
+            
+            const height = getTerrainHeight(x, z);
+            group.position.set(x, height, z);
+            scene.add(group);
+        }
+        
+        // Buildings
+        function createBuilding(x, z, width, depth, height) {
+            const geometry = new THREE.BoxGeometry(width, height, depth);
+            const material = new THREE.MeshStandardMaterial({ 
+                color: 0x8b7355,
+                roughness: 0.7
+            });
+            const building = new THREE.Mesh(geometry, material);
+            
+            const terrainHeight = getTerrainHeight(x, z);
+            building.position.set(x, terrainHeight + height / 2, z);
+            building.castShadow = true;
+            building.receiveShadow = true;
+            scene.add(building);
+            
+            // Roof
+            const roofGeometry = new THREE.ConeGeometry(Math.max(width, depth) * 0.7, 2, 4);
+            const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x8b4513 });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.position.set(x, terrainHeight + height + 1, z);
+            roof.rotation.y = Math.PI / 4;
+            roof.castShadow = true;
+            scene.add(roof);
+        }
+        
+        // Generate world
+        function generateWorld() {
+            createTerrain();
+            
+            // Trees
+            for (let i = 0; i < 100; i++) {
+                const x = (Math.random() - 0.5) * 150;
+                const z = (Math.random() - 0.5) * 150;
+                if (Math.abs(x) > 10 || Math.abs(z) > 10) {
+                    createTree(x, z);
+                }
+            }
+            
+            // Buildings
+            createBuilding(20, 20, 8, 8, 6);
+            createBuilding(-25, 15, 6, 10, 8);
+            createBuilding(15, -30, 10, 6, 5);
+            createBuilding(-20, -20, 7, 7, 7);
+        }
+        
+        function getTerrainHeight(x, z) {
+            return Math.sin(x * 0.05) * 2 + Math.cos(z * 0.05) * 2;
+        }
+        
+        // Skybox
+        function createSky() {
+            const skyGeometry = new THREE.SphereGeometry(500, 32, 32);
+            const skyMaterial = new THREE.MeshBasicMaterial({
+                color: 0x87CEEB,
+                side: THREE.BackSide
+            });
+            const sky = new THREE.Mesh(skyGeometry, skyMaterial);
+            scene.add(sky);
+            return sky;
+        }
+        
+        const sky = createSky();
+        
+        // Update sky color based on time
+        function updateSkyColor() {
+            let color;
+            if (gameState.time >= 6 && gameState.time < 18) {
+                // Day
+                const t = (gameState.time - 6) / 12;
+                color = new THREE.Color().lerpColors(
+                    new THREE.Color(0xffa500), // Dawn
+                    new THREE.Color(0x87CEEB), // Day
+                    Math.sin(t * Math.PI)
+                );
+            } else {
+                // Night
+                color = new THREE.Color(0x0c1445);
+            }
+            
+            sky.material.color = color;
+            scene.fog.color = color;
+            renderer.setClearColor(color);
+            
+            // Update lighting
+            const lightIntensity = gameState.time >= 6 && gameState.time < 18 ? 0.8 : 0.2;
+            sunLight.intensity = lightIntensity;
+            ambientLight.intensity = gameState.time >= 6 && gameState.time < 18 ? 0.4 : 0.1;
+        }
+        
+        // Input handlers
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            
+            if (e.key.toLowerCase() === 't') {
+                gameState.time = gameState.time >= 18 ? 6 : 18;
+                updateSkyColor();
+            }
+            
+            if (e.key.toLowerCase() === 'c') {
+                gameState.cameraMode = gameState.cameraMode === 'first-person' ? 'third-person' : 'first-person';
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+        
+        canvas.addEventListener('click', () => {
+            canvas.requestPointerLock();
+        });
+        
+        document.addEventListener('pointerlockchange', () => {
+            mouse.locked = document.pointerLockElement === canvas;
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (mouse.locked) {
+                player.rotation.y -= e.movementX * 0.002;
+                player.rotation.x -= e.movementY * 0.002;
+                player.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.rotation.x));
+            }
+        });
+        
+        // Physics and movement
+        function updatePlayer(delta) {
+            const speed = keys['shift'] ? player.sprintSpeed : player.speed;
+            
+            // Movement
+            const forward = new THREE.Vector3();
+            const right = new THREE.Vector3();
+            
+            forward.setFromMatrixColumn(new THREE.Matrix4().makeRotationY(player.rotation.y), 2);
+            right.setFromMatrixColumn(new THREE.Matrix4().makeRotationY(player.rotation.y), 0);
+            
+            if (keys['w']) player.velocity.add(forward.multiplyScalar(-speed));
+            if (keys['s']) player.velocity.add(forward.multiplyScalar(speed));
+            if (keys['a']) player.velocity.add(right.multiplyScalar(-speed));
+            if (keys['d']) player.velocity.add(right.multiplyScalar(speed));
+            
+            // Jump
+            if (keys[' '] && player.onGround) {
+                player.velocity.y = player.jumpPower;
+                player.onGround = false;
+            }
+            
+            // Gravity
+            player.velocity.y -= 0.02;
+            
+            // Update position
+            player.position.add(player.velocity);
+            
+            // Terrain collision
+            const terrainHeight = getTerrainHeight(player.position.x, player.position.z);
+            if (player.position.y <= terrainHeight + player.height) {
+                player.position.y = terrainHeight + player.height;
+                player.velocity.y = 0;
+                player.onGround = true;
+            }
+            
+            // Damping
+            player.velocity.x *= 0.85;
+            player.velocity.z *= 0.85;
+            
+            // Update camera
+            if (gameState.cameraMode === 'first-person') {
+                camera.position.copy(player.position);
+                camera.rotation.set(player.rotation.x, player.rotation.y, 0);
+            } else {
+                // Third person
+                const offset = new THREE.Vector3(0, 2, 5);
+                offset.applyEuler(new THREE.Euler(player.rotation.x, player.rotation.y, 0));
+                camera.position.copy(player.position).add(offset);
+                camera.lookAt(player.position);
+            }
+        }
+        
+        // Minimap
+        const minimapCanvas = document.getElementById('minimap');
+        const minimapCtx = minimapCanvas.getContext('2d');
+        minimapCanvas.width = 150;
+        minimapCanvas.height = 150;
+        
+        function drawMinimap() {
+            minimapCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            minimapCtx.fillRect(0, 0, 150, 150);
+            
+            // Player
+            const scale = 1;
+            const centerX = 75;
+            const centerY = 75;
+            
+            minimapCtx.fillStyle = '#ff0000';
+            minimapCtx.beginPath();
+            minimapCtx.arc(centerX, centerY, 3, 0, Math.PI * 2);
+            minimapCtx.fill();
+            
+            // Direction indicator
+            minimapCtx.strokeStyle = '#ff0000';
+            minimapCtx.lineWidth = 2;
+            minimapCtx.beginPath();
+            minimapCtx.moveTo(centerX, centerY);
+            minimapCtx.lineTo(
+                centerX + Math.sin(player.rotation.y) * 10,
+                centerY + Math.cos(player.rotation.y) * 10
+            );
+            minimapCtx.stroke();
+        }
+        
+        // UI Updates
+        function updateUI() {
+            document.getElementById('timeDisplay').textContent = 
+                `${Math.floor(gameState.time)}:${String(Math.floor((gameState.time % 1) * 60)).padStart(2, '0')}`;
+            document.getElementById('posDisplay').textContent = 
+                `${player.position.x.toFixed(1)}, ${player.position.y.toFixed(1)}, ${player.position.z.toFixed(1)}`;
+        }
+        
+        // FPS Counter
+        let lastTime = performance.now();
+        let frames = 0;
+        let fps = 60;
+        
+        function updateFPS() {
+            frames++;
+            const currentTime = performance.now();
+            if (currentTime >= lastTime + 1000) {
+                fps = Math.round((frames * 1000) / (currentTime - lastTime));
+                document.getElementById('fpsDisplay').textContent = fps;
+                frames = 0;
+                lastTime = currentTime;
+            }
+        }
+        
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            updatePlayer(1);
+            updateUI();
+            updateFPS();
+            drawMinimap();
+            
+            renderer.render(scene, camera);
+        }
+        
+        // Window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Initialize
+        generateWorld();
+        updateSkyColor();
+        animate();
+    </script>
+</body>
+</html>
